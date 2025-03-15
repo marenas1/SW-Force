@@ -1,25 +1,38 @@
 import React, { useRef, useEffect, useState } from "react";
 import * as tf from "@tensorflow/tfjs";
 import * as poseDetection from "@tensorflow-models/pose-detection";
+//import fl from "./assets/flIcon.jpg"
+
+const App: React.FC = () => {
+  return (
+    <div>
+      <FlPage height={176} weight={77}></FlPage>
+    </div>
+  );
+};
+export default App;
 
 interface Keypoint {
   x: number;
   y: number;
 }
 
-interface Angles {
-  shoulder: number;
-  trunk: number;
+interface FlPageProps{  
+    height:number;
+    weight:number
 }
 
-const App: React.FC = () => {
+const FlPage: React.FC<FlPageProps> = ({height,weight}) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [angles, setAngles] = useState<Angles>({ shoulder: 0, trunk: 0 });
+  const [angle,setAngle]= useState<number>(0)
   const [force, setForce] = useState<string>("");
-
+  const [forcelbs, setForcelbs] = useState<string>("")
+  const [bodyLength, setBodyLength] = useState<number>(height)
+  const headToHip: number=(height*0.55)
   useEffect(() => {
-
+    console.log(height)
+    console.log(weight)
     const setupCamera = async () => {
       //uses navigator and only gets video, no audi
       try {
@@ -44,6 +57,34 @@ const App: React.FC = () => {
     //Angle Calculations
     //Takes in key points, using x and y axis creates vectors, then we just find the angle
 
+    const calculateBodyLength = (head: Keypoint, hip: Keypoint, foot: Keypoint): number => {
+      //We assume head to hip is 0.55 of person length
+      //If we take the length from head to hip in pixel distance, then we can assume the length of how far the hip to feet is, allowing us to get accurate lever length
+      //Dont make straight line from head to hip, instead take linear distance as good form should be straight, no pike
+      //then do the same for the feet to hip
+      const headToHipPixels = Math.abs(head.x-hip.x)
+      const hipToFootPixels = Math.abs(hip.x-foot.x)
+      const realWorldLength = headToHip+(headToHip*(hipToFootPixels/headToHipPixels))
+      if(realWorldLength>height){
+        return height
+      }
+      return realWorldLength
+    };
+
+    //will change to user inputs later
+    const calculateShoulderForce = (weight: number, L: number, angle: number): number => {
+      const g = 9.81; 
+      const angleInRadians = angle * (Math.PI / 180); 
+      console.log(weight)
+      console.log(angleInRadians+"radians")
+      console.log(L)
+      console.log("l")
+      const torque = weight * g * L/100 * Math.sin(angleInRadians); // Calculate torque using weight,gravity,moment arm and angle
+      console.log("torequ"+torque)
+      return torque;
+    };
+
+
     const calculateShoulderAngle = (shoulder: Keypoint, elbow: Keypoint, hip: Keypoint): number => {
       const vectorShoulderElbow = { x: elbow.x - shoulder.x, y: elbow.y - shoulder.y };
       const vectorShoulderHip = { x: hip.x - shoulder.x, y: hip.y - shoulder.y };
@@ -58,13 +99,7 @@ const App: React.FC = () => {
       return parseFloat(angleInDegrees.toFixed(2));
     };
 
-    const calculateTrunkAngle = (shoulder: Keypoint, hip: Keypoint): number => {
-      const vectorShoulderHip = { x: hip.x - shoulder.x, y: hip.y - shoulder.y };
-      const angleInRadians = Math.atan2(vectorShoulderHip.y, vectorShoulderHip.x);
-      const angleInDegrees = angleInRadians * (180 / Math.PI);
-
-      return parseFloat(angleInDegrees.toFixed(2));
-    };
+    
 
     //Draws lines onto the video
 
@@ -84,26 +119,27 @@ const App: React.FC = () => {
         ctx.lineWidth = 8;
         ctx.stroke();
       };
-
+      const drawBodyLength = (A: Keypoint, B: Keypoint) => {
+        ctx.beginPath();
+        ctx.moveTo(A.x, A.y);
+        ctx.lineTo(B.x, B.y);
+        ctx.strokeStyle = "green"; 
+        ctx.lineWidth = 8;
+        ctx.stroke();
+      };
+      
       // Drawing shoulder to elbow, elbow to wrist, hip to knee, knee to ankle
       drawLine(keypoints[5] as Keypoint, keypoints[7] as Keypoint); // Shoulder to elbow
       drawLine(keypoints[7] as Keypoint, keypoints[11] as Keypoint); // Elbow to wrist
       drawLine(keypoints[5] as Keypoint, keypoints[11] as Keypoint); // Shoulder to hip (Trunk)
+      //Three calls below draw the line of the body length (right side)
+      //drawBodyLength(keypoints[4] as Keypoint, keypoints[6] as Keypoint)//head to shoulder
+      drawBodyLength(keypoints[5] as Keypoint, keypoints[11] as Keypoint)//shoulder to hip
+      drawBodyLength(keypoints[11] as Keypoint, keypoints[15] as Keypoint)//hip to foot
     };
-    //will change to user inputs later
-    const calculateShoulderForce = (mass: number, height: number, angle: number): number => {
-      const g = 9.81;
-      const angleInRadians = angle * (Math.PI / 180);
-      const L = height * 0.55; // Center of mass is approximately 55% of body height
-      const weight = mass * g;
-      const dLever = L * Math.cos(angleInRadians);
-      const shoulderForce = weight * (dLever / L);
+    
 
-      return shoulderForce;
-    };
-
-    const mass = 70; // Mass of the subject in kg
-    const height = 1.75; // Height of the subject in meters
+    
 
     const runPoseEstimation = async () => {
       await setupTF();
@@ -121,29 +157,25 @@ const App: React.FC = () => {
               const keypoints = poses[0].keypoints;
 
               drawSkeleton(keypoints);
+              const hip= keypoints[12] as Keypoint;
+              const shoulder = keypoints[6] as Keypoint;
+              const foot = keypoints[16] as Keypoint;
+
+              const newBodyLength = calculateBodyLength(shoulder,hip, foot);
+              setBodyLength(newBodyLength);
               const shoulderAngle = calculateShoulderAngle(
                 keypoints[5] as Keypoint, // shoulder
                 keypoints[7] as Keypoint, // elbow
                 keypoints[11] as Keypoint // hip
               );
-
-              const trunkAngle = calculateTrunkAngle(
-                keypoints[5] as Keypoint, // shoulder
-                keypoints[11] as Keypoint // hip
-              );
-
-              setAngles({ shoulder: shoulderAngle, trunk: trunkAngle });
-
-              // Check if the angles are too small for significant force
-              if (trunkAngle > 45) {
-                setForce("Not enough force applied yet");
-              } else {
-                const shoulderForce = calculateShoulderForce(mass, height, shoulderAngle);
-                setForce(`${shoulderForce.toFixed(2)} N`);
-              }
+              setAngle(shoulderAngle) 
+              const shoulderForce = calculateShoulderForce(weight, newBodyLength, shoulderAngle);
+              const shoulderForcelbs = shoulderForce*0.2248
+              setForcelbs(`${shoulderForcelbs.toFixed(2)} lbs`)
+              setForce(`${shoulderForce.toFixed(2)} N`);
+              
 
               console.log(`Detected shoulder angle: ${shoulderAngle.toFixed(2)}°`);
-              console.log(`Detected trunk angle: ${trunkAngle.toFixed(2)}°`);
             }
           }
           requestAnimationFrame(detect);
@@ -153,18 +185,19 @@ const App: React.FC = () => {
     };
 
     runPoseEstimation();
-  }, []);
+  }, [height,weight]);
+
+  
 
   return (
     <div>
-      <h1>Pose Angle Detection</h1>
+      <h1>Front Lever Force</h1>
       <video ref={videoRef} autoPlay playsInline muted width="640" height="480" style={{ display: "none" }} />
       <canvas ref={canvasRef} width="640" height="480" style={{ border: "1px solid black" }} />
-      <p>Shoulder Angle: {angles.shoulder}°</p>
-      <p>Trunk Angle: {angles.trunk}°</p>
-      <p>Shoulder Force: {force}</p>
+      <p>Angle {angle}</p>
+      <p>Torque N: {force}</p>
+      <p>Lat Force lbs: {forcelbs}</p>
+      <p>Body Length: {bodyLength}</p>
     </div>
   );
 };
-
-export default App;
